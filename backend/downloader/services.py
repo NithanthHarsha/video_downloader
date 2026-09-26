@@ -257,7 +257,9 @@ def get_base_ydl_opts() -> Dict[str, Any]:
         'js_runtimes': get_discovered_js_runtimes(),
         'extractor_args': {
             'youtube': {
-                'player_client': ['default', 'mweb', 'android'],
+                'player_client': ['default', 'web', 'mweb', 'android', 'tv'],
+                'fetch_pot': ['always'],
+                'webpage_skip': ['player_response'],
             },
             'youtubepot-bgutilhttp': {
                 'base_url': ['http://127.0.0.1:4416'],
