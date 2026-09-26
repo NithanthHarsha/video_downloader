@@ -5,21 +5,46 @@ set -e
 echo "===> Preparing runtime environment..."
 
 # Export Deno to PATH if installed in user directory
-if [ -d "$HOME/.deno/bin" ]; then
-    export PATH="$HOME/.deno/bin:$PATH"
+export DENO_INSTALL="$HOME/.deno"
+if [ -d "$DENO_INSTALL/bin" ]; then
+    export PATH="$DENO_INSTALL/bin:$PATH"
 fi
 
-# Ensure bgutil-server is compiled and start in background
+# Start bgutil PO Token Provider HTTP server
 if [ -d "bgutil-server" ]; then
-    if [ ! -f "bgutil-server/build/main.js" ]; then
-        echo "Building bgutil-server TypeScript code..."
-        (cd bgutil-server && npx tsc || true)
+    cd bgutil-server
+
+    # Ensure node_modules exists
+    if [ ! -d "node_modules" ]; then
+        echo "Installing bgutil-server dependencies at startup..."
+        npm install --omit=dev --no-audit --no-fund || npm install
     fi
 
-    if [ -f "bgutil-server/build/main.js" ]; then
-        echo "Starting local bgutil PO Token HTTP server (v2.0.0) on 127.0.0.1:4416..."
-        node bgutil-server/build/main.js --port 4416 --host 127.0.0.1 &
-        sleep 2
+    # Ensure build/main.js exists
+    if [ ! -f "build/main.js" ]; then
+        echo "Compiling bgutil-server TypeScript..."
+        npx tsc || true
+    fi
+
+    echo "Starting local bgutil PO Token HTTP server (v2.0.0) on 127.0.0.1:4416..."
+    node build/main.js --port 4416 --host 127.0.0.1 >> ../bgutil_server.log 2>&1 &
+    cd ..
+
+    # Health check verification loop
+    echo "Waiting for bgutil PO Token server to respond on 127.0.0.1:4416/ping..."
+    SERVER_READY=false
+    for i in {1..30}; do
+        if curl -s -f http://127.0.0.1:4416/ping > /dev/null 2>&1; then
+            echo "bgutil PO Token server is UP and responding on 127.0.0.1:4416!"
+            SERVER_READY=true
+            break
+        fi
+        sleep 0.5
+    done
+
+    if [ "$SERVER_READY" = false ]; then
+        echo "WARNING: bgutil-server did not respond to /ping in 15 seconds. Log output:"
+        cat bgutil_server.log || true
     fi
 fi
 

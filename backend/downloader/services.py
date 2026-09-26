@@ -46,56 +46,70 @@ def ensure_pot_server_running() -> bool:
     if check_pot_server_health():
         return True
 
-    # Look for compiled bgutil-server main.js
-    server_candidates = [
-        settings.BASE_DIR / "bgutil-server" / "build" / "main.js",
-        Path.cwd() / "bgutil-server" / "build" / "main.js",
-        Path.home() / "bgutil-server" / "build" / "main.js",
-        Path("/opt/render/project/src/backend/bgutil-server/build/main.js"),
+    bgutil_candidates = [
+        settings.BASE_DIR / "bgutil-server",
+        Path.cwd() / "bgutil-server",
+        Path.home() / "bgutil-server",
+        Path("/opt/render/project/src/backend/bgutil-server"),
     ]
 
-    server_script = None
-    for cand in server_candidates:
-        if cand.exists() and cand.is_file():
-            server_script = str(cand)
+    bgutil_dir = None
+    for cand in bgutil_candidates:
+        if cand.exists() and (cand / "package.json").exists():
+            bgutil_dir = cand
             break
 
-    # If main.js does not exist yet but bgutil-server directory exists, attempt compilation
-    if not server_script:
-        bgutil_dirs = [
-            settings.BASE_DIR / "bgutil-server",
-            Path.cwd() / "bgutil-server",
-            Path("/opt/render/project/src/backend/bgutil-server"),
-        ]
-        for b_dir in bgutil_dirs:
-            if (b_dir / "package.json").exists():
-                try:
-                    logger.info(f"Compiling bgutil-server TypeScript code in '{b_dir}'...")
-                    subprocess.run(["npx", "tsc"], cwd=str(b_dir), shell=(os.name == 'nt'), capture_output=True, timeout=30)
-                    built = b_dir / "build" / "main.js"
-                    if built.exists():
-                        server_script = str(built)
-                        break
-                except Exception as err:
-                    logger.warning(f"Could not build bgutil-server at runtime: {err}")
+    if not bgutil_dir:
+        logger.warning("[POT Supervisor] bgutil-server directory not found")
+        return False
+
+    # Ensure node_modules exists
+    if not (bgutil_dir / "node_modules").exists():
+        try:
+            logger.info(f"Installing bgutil-server npm dependencies in '{bgutil_dir}'...")
+            subprocess.run(
+                ["npm", "install", "--omit=dev", "--no-audit", "--no-fund"],
+                cwd=str(bgutil_dir),
+                shell=(os.name == 'nt'),
+                capture_output=True,
+                timeout=60
+            )
+        except Exception as err:
+            logger.warning(f"Could not install npm dependencies: {err}")
+
+    # Ensure build/main.js exists
+    main_js = bgutil_dir / "build" / "main.js"
+    if not main_js.exists():
+        try:
+            logger.info(f"Compiling bgutil-server TypeScript in '{bgutil_dir}'...")
+            subprocess.run(
+                ["npx", "tsc"],
+                cwd=str(bgutil_dir),
+                shell=(os.name == 'nt'),
+                capture_output=True,
+                timeout=30
+            )
+        except Exception as err:
+            logger.warning(f"Could not compile TypeScript: {err}")
 
     node_bin = shutil.which('node') or 'node'
 
-    if server_script:
+    if main_js.exists():
         try:
-            logger.info(f"Starting bgutil PO Token server from '{server_script}' on 127.0.0.1:4416...")
+            logger.info(f"Starting bgutil PO Token server in '{bgutil_dir}' on 127.0.0.1:4416...")
             _pot_server_process = subprocess.Popen(
-                [node_bin, server_script, "--port", "4416", "--host", "127.0.0.1"],
+                [node_bin, str(main_js), "--port", "4416", "--host", "127.0.0.1"],
+                cwd=str(bgutil_dir),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            for _ in range(15):
+            for _ in range(25):
                 time.sleep(0.2)
                 if check_pot_server_health():
                     logger.info("[POT Supervisor] bgutil PO token server is healthy and active on 127.0.0.1:4416")
                     return True
         except Exception as err:
-            logger.warning(f"Failed to start bgutil PO token server process: {err}")
+            logger.warning(f"Failed to spawn bgutil server process: {err}")
 
     return check_pot_server_health()
 

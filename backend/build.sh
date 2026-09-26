@@ -15,12 +15,12 @@ fi
 
 echo "===> Setting up YouTube PO Token Provider Server (v2.0.0)..."
 if [ -d "bgutil-server" ]; then
-    echo "Installing bgutil-server dependencies and compiling TypeScript..."
+    echo "Installing bgutil-server dependencies and building..."
     cd bgutil-server
-    npm install --production=false
-    npx tsc
+    npm install --omit=dev --no-audit --no-fund || npm install
+    npx tsc || true
     cd ..
-    echo "bgutil-server successfully built!"
+    echo "bgutil-server successfully prepared!"
 else
     echo "Warning: bgutil-server directory not found!"
 fi

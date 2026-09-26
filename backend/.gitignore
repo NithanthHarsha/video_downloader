@@ -46,5 +46,6 @@ htmlcov/
 # Node / JS
 node_modules/
 bgutil-server/node_modules/
-bgutil-server/build/
+bgutil-server/dist/
+
 
