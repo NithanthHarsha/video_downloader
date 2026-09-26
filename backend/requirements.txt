@@ -4,6 +4,7 @@ django-cors-headers>=4.4.0
 python-dotenv>=1.0.1
 yt-dlp[default]>=2025.01.15
 yt-dlp-ejs>=0.8.0
+bgutil-ytdlp-pot-provider>=2.0.0
 requests>=2.32.0
 gunicorn>=22.0.0
 whitenoise>=6.7.0

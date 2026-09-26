@@ -91,4 +91,7 @@ class DownloaderApiTests(TestCase):
         opts = VideoService.get_ydl_opts()
         self.assertIn('js_runtimes', opts)
         self.assertTrue(opts.get('skip_download'))
+        self.assertIn('extractor_args', opts)
+        self.assertIn('youtube', opts['extractor_args'])
+
 

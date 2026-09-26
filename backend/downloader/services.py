@@ -4,13 +4,94 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import importlib.metadata
+import json
 import subprocess
 import shutil
+import time
+import urllib.request
 import yt_dlp
 from django.conf import settings
 from .utils import sanitize_filename, format_duration, format_filesize
 
 logger = logging.getLogger(__name__)
+
+_pot_server_process = None
+
+
+def check_pot_server_health(host: str = "127.0.0.1", port: int = 4416) -> bool:
+    """
+    Checks if the local bgutil PO token server is responding on the given port.
+    """
+    try:
+        req = urllib.request.Request(
+            f"http://{host}:{port}/ping",
+            headers={"User-Agent": "yt-dlp-pot-checker"}
+        )
+        with urllib.request.urlopen(req, timeout=1.0) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode())
+                return bool(data.get("version") or data.get("status") == "ok")
+    except Exception:
+        pass
+    return False
+
+
+def ensure_pot_server_running() -> bool:
+    """
+    Ensures the local bgutil PO Token Provider HTTP server is running on 127.0.0.1:4416
+    for dynamic, unauthenticated BotGuard challenge resolution.
+    """
+    global _pot_server_process
+    if check_pot_server_health():
+        return True
+
+    pot_candidates = [
+        shutil.which('bgutil-pot'),
+        str(Path.home() / ".deno" / "bin" / ("bgutil-pot.exe" if os.name == "nt" else "bgutil-pot")),
+        "/opt/render/.deno/bin/bgutil-pot",
+        "/root/.deno/bin/bgutil-pot",
+        str(settings.BASE_DIR / "bin" / ("bgutil-pot.exe" if os.name == "nt" else "bgutil-pot")),
+    ]
+
+    pot_bin = None
+    for cand in pot_candidates:
+        if cand and os.path.exists(cand) and os.path.isfile(cand) and os.path.getsize(cand) > 1000000 and os.access(cand, os.X_OK if hasattr(os, 'X_OK') else os.F_OK):
+            pot_bin = cand
+            break
+
+    # If running on Linux and binary not present, attempt runtime download
+    if not pot_bin and os.name != 'nt':
+        try:
+            target_dir = Path.home() / ".deno" / "bin"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target_bin = target_dir / "bgutil-pot"
+            logger.info("Downloading bgutil-pot binary for Linux PO Token generation...")
+            urllib.request.urlretrieve(
+                "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/latest/download/bgutil-pot-linux-x86_64",
+                str(target_bin)
+            )
+            os.chmod(str(target_bin), 0o755)
+            pot_bin = str(target_bin)
+        except Exception as err:
+            logger.warning(f"Could not auto-download bgutil-pot binary: {err}")
+
+    if pot_bin:
+        try:
+            logger.info(f"Starting bgutil PO token server at '{pot_bin}' on 127.0.0.1:4416...")
+            _pot_server_process = subprocess.Popen(
+                [pot_bin, "server", "--host", "127.0.0.1", "--port", "4416"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            for _ in range(10):
+                time.sleep(0.2)
+                if check_pot_server_health():
+                    logger.info("bgutil PO token server is healthy and active on 127.0.0.1:4416")
+                    return True
+        except Exception as err:
+            logger.warning(f"Failed to start bgutil PO token server process: {err}")
+
+    return check_pot_server_health()
 
 
 def _get_binary_version(binary_path: str) -> Optional[str]:
@@ -106,21 +187,40 @@ def log_extraction_diagnostics(url: str):
         ejs_ver = 'not-installed'
         ejs_available = False
 
+    try:
+        pot_pkg_ver = importlib.metadata.version('bgutil-ytdlp-pot-provider')
+    except Exception:
+        pot_pkg_ver = 'not-installed'
+
+    pot_server_online = check_pot_server_health()
+    runtimes = get_discovered_js_runtimes()
+    active_js_runtimes = [k for k, v in runtimes.items() if v.get('path') or k in ('deno', 'node')]
+
     logger.info(
-        f"[Diagnostics] yt-dlp: {ytdlp_ver} | yt-dlp-ejs: {ejs_ver} (available={ejs_available}) | Target URL: {url}"
+        f"[Diagnostics] yt-dlp: {ytdlp_ver} | yt-dlp-ejs: {ejs_ver} (available={ejs_available}) | "
+        f"POT Provider: bgutil-ytdlp-pot-provider={pot_pkg_ver} (server 127.0.0.1:4416 online={pot_server_online}) | "
+        f"JS Runtimes: {active_js_runtimes} | Target URL: {url}"
     )
 
 
 def get_base_ydl_opts() -> Dict[str, Any]:
     """
-    Returns standard yt-dlp configuration with JS runtimes enabled
-    for solving YouTube EJS JavaScript challenges safely.
+    Returns standard yt-dlp configuration with JS runtimes and PO Token provider enabled
+    for solving YouTube EJS JavaScript challenges and BotGuard Proof of Origin tokens safely.
     """
+    # Ensure local PO token server daemon is running if available
+    ensure_pot_server_running()
+
     return {
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
         'js_runtimes': get_discovered_js_runtimes(),
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['web', 'mweb', 'android', 'ios', 'tv'],
+            }
+        }
     }
 
 
