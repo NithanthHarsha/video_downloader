@@ -160,33 +160,40 @@ def get_discovered_js_runtimes() -> Dict[str, Dict[str, Any]]:
             logger.warning(f"Could not bootstrap Deno at runtime: {err}")
 
     if deno_bin:
-        runtimes['deno'] = {'path': deno_bin}
-        deno_version = _get_binary_version(deno_bin)
+        runtimes['deno'] = {'path': str(deno_bin)}
+        deno_version = _get_binary_version(str(deno_bin))
         logger.info(f"[Diagnostics] Detected Deno runtime at '{deno_bin}' (Version: {deno_version or 'unknown'})")
     else:
         runtimes['deno'] = {}
 
     # Check for Node.js
     node_bin = shutil.which('node')
+    if not node_bin:
+        node_candidates = [
+            Path("/usr/local/bin/node"),
+            Path("/usr/bin/node"),
+            Path("/opt/render/project/src/.nodejs/bin/node"),
+        ]
+        for candidate in node_candidates:
+            if candidate.exists() and os.access(candidate, os.X_OK if hasattr(os, 'X_OK') else os.F_OK):
+                node_bin = str(candidate)
+                break
+
     if node_bin:
-        runtimes['node'] = {'path': node_bin}
-        node_version = _get_binary_version(node_bin)
+        runtimes['node'] = {'path': str(node_bin)}
+        node_version = _get_binary_version(str(node_bin))
         logger.info(f"[Diagnostics] Detected Node runtime at '{node_bin}' (Version: {node_version or 'unknown'})")
     else:
         runtimes['node'] = {}
 
     # QuickJS and Bun fallbacks
-    quickjs_bin = shutil.which('quickjs')
+    quickjs_bin = shutil.which('quickjs') or shutil.which('qjs')
     if quickjs_bin:
-        runtimes['quickjs'] = {'path': quickjs_bin}
-    else:
-        runtimes['quickjs'] = {}
+        runtimes['quickjs'] = {'path': str(quickjs_bin)}
 
     bun_bin = shutil.which('bun')
     if bun_bin:
-        runtimes['bun'] = {'path': bun_bin}
-    else:
-        runtimes['bun'] = {}
+        runtimes['bun'] = {'path': str(bun_bin)}
 
     return runtimes
 
@@ -225,7 +232,7 @@ def log_extraction_diagnostics(url: str):
     logger.info(
         f"[YT DEBUG] provider_registered={provider_registered} | "
         f"bgutil_reachable={bgutil_reachable} | "
-        f"selected_client=mweb | "
+        f"selected_client=default,mweb,android | "
         f"yt_dlp_version={ytdlp_ver} | "
         f"yt_dlp_ejs_version={ejs_ver} | "
         f"bgutil_provider_version={pot_pkg_ver} | "
@@ -250,7 +257,7 @@ def get_base_ydl_opts() -> Dict[str, Any]:
         'js_runtimes': get_discovered_js_runtimes(),
         'extractor_args': {
             'youtube': {
-                'player_client': ['mweb', 'web', 'ios', 'android'],
+                'player_client': ['default', 'mweb', 'android'],
             },
             'youtubepot-bgutilhttp': {
                 'base_url': ['http://127.0.0.1:4416'],
