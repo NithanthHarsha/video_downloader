@@ -80,3 +80,15 @@ class DownloaderApiTests(TestCase):
         )
         self.assertEqual(req.status, DownloadRequest.Status.PENDING)
         self.assertIn("PENDING", str(req))
+
+    def test_js_runtimes_configuration(self):
+        from downloader.services import get_discovered_js_runtimes, VideoService
+        runtimes = get_discovered_js_runtimes()
+        self.assertIsInstance(runtimes, dict)
+        self.assertIn('deno', runtimes)
+        self.assertIn('node', runtimes)
+
+        opts = VideoService.get_ydl_opts()
+        self.assertIn('js_runtimes', opts)
+        self.assertTrue(opts.get('skip_download'))
+

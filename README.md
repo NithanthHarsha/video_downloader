@@ -60,7 +60,7 @@ git push -u origin main
 Deploy the `backend/` folder on **Render**, **Railway**, **Heroku**, or any Linux VPS / container service.
 
 - **Root Directory**: `backend`
-- **Build Command**: `pip install -r requirements.txt && python manage.py migrate`
+- **Build Command**: `bash build.sh` (or `pip install -r requirements.txt && python manage.py migrate`)
 - **Start Command**: `gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 3600`
 - **Environment Variables**:
   ```env

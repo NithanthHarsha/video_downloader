@@ -8,6 +8,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Load environment variables from .env file
 load_dotenv(BASE_DIR / '.env')
 
+# Ensure JavaScript runtimes (Deno, Node, etc.) are available in PATH for yt-dlp EJS challenges
+_js_runtime_paths = [
+    Path.home() / ".deno" / "bin",
+    Path("/opt/render/.deno/bin"),
+    Path("/root/.deno/bin"),
+    Path("/usr/local/bin"),
+]
+for _rp in _js_runtime_paths:
+    if _rp.exists():
+        _rp_str = str(_rp)
+        if _rp_str not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = f"{_rp_str}{os.pathsep}{os.environ.get('PATH', '')}"
+
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
 

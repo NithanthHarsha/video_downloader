@@ -3,11 +3,76 @@ import uuid
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
+import shutil
 import yt_dlp
 from django.conf import settings
 from .utils import sanitize_filename, format_duration, format_filesize
 
 logger = logging.getLogger(__name__)
+
+
+def get_discovered_js_runtimes() -> Dict[str, Dict[str, Any]]:
+    """
+    Discovers available JavaScript runtimes (Deno, Node, QuickJS, Bun)
+    to power yt-dlp YouTube EJS challenge solvers.
+    """
+    runtimes: Dict[str, Dict[str, Any]] = {}
+
+    # Check for Deno (primary recommendation for yt-dlp EJS)
+    deno_bin = shutil.which('deno')
+    if not deno_bin:
+        deno_candidates = [
+            Path.home() / ".deno" / "bin" / ("deno.exe" if os.name == "nt" else "deno"),
+            Path("/opt/render/.deno/bin/deno"),
+            Path("/root/.deno/bin/deno"),
+            Path("/usr/local/bin/deno"),
+            Path("/usr/bin/deno"),
+        ]
+        for candidate in deno_candidates:
+            if candidate.exists() and os.access(candidate, os.X_OK if hasattr(os, 'X_OK') else os.F_OK):
+                deno_bin = str(candidate)
+                break
+
+    if deno_bin:
+        runtimes['deno'] = {'path': deno_bin}
+    else:
+        runtimes['deno'] = {}
+
+    # Check for Node.js
+    node_bin = shutil.which('node')
+    if node_bin:
+        runtimes['node'] = {'path': node_bin}
+    else:
+        runtimes['node'] = {}
+
+    # QuickJS and Bun fallbacks
+    quickjs_bin = shutil.which('quickjs')
+    if quickjs_bin:
+        runtimes['quickjs'] = {'path': quickjs_bin}
+    else:
+        runtimes['quickjs'] = {}
+
+    bun_bin = shutil.which('bun')
+    if bun_bin:
+        runtimes['bun'] = {'path': bun_bin}
+    else:
+        runtimes['bun'] = {}
+
+    return runtimes
+
+
+def get_base_ydl_opts() -> Dict[str, Any]:
+    """
+    Returns standard yt-dlp configuration with JS runtimes enabled
+    for solving YouTube EJS JavaScript challenges safely.
+    """
+    return {
+        'quiet': True,
+        'no_warnings': True,
+        'noplaylist': True,
+        'js_runtimes': get_discovered_js_runtimes(),
+    }
+
 
 class VideoService:
     """
@@ -17,20 +82,13 @@ class VideoService:
 
     @staticmethod
     def get_ydl_opts() -> Dict[str, Any]:
-        return {
-            'quiet': True,
-            'no_warnings': True,
+        opts = get_base_ydl_opts()
+        opts.update({
             'skip_download': True,
             'extract_flat': False,
-            'noplaylist': True,
             'socket_timeout': 30,
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Sec-Fetch-Mode': 'navigate',
-            }
-        }
+        })
+        return opts
 
     @classmethod
     def extract_info(cls, url: str) -> Dict[str, Any]:
@@ -51,8 +109,9 @@ class VideoService:
                 return cls._parse_video_info(url, info)
 
         except yt_dlp.utils.DownloadError as e:
-            error_msg = str(e).lower()
-            logger.warning(f"yt-dlp DownloadError for {url}: {error_msg}")
+            raw_err = str(e)
+            error_msg = raw_err.lower()
+            logger.error(f"yt-dlp DownloadError for {url}: {raw_err}", exc_info=True)
 
             if "private video" in error_msg or "is private" in error_msg:
                 raise ValueError("PRIVATE_VIDEO: This video is private and cannot be accessed.")
@@ -67,10 +126,11 @@ class VideoService:
             elif "unsupported url" in error_msg:
                 raise ValueError("UNSUPPORTED_URL: The provided URL is not supported.")
             else:
-                raise ValueError(f"EXTRACTION_FAILED: Unable to process video. Please check the URL.")
+                cleaned_msg = raw_err.replace("ERROR: ", "").strip()
+                raise ValueError(f"EXTRACTION_FAILED: {cleaned_msg}")
 
         except Exception as e:
-            logger.error(f"Unexpected error extracting {url}: {e}")
+            logger.error(f"Unexpected error extracting {url}: {e}", exc_info=True)
             raise ValueError(f"EXTRACTION_FAILED: {str(e)}")
 
     @classmethod
@@ -209,8 +269,6 @@ class VideoService:
         return curated
 
 
-import shutil
-
 class DownloadService:
     """
     Handles downloading and preparing lawful video streams for streaming response.
@@ -229,16 +287,11 @@ class DownloadService:
         outtmpl = str(task_dir / "%(title).100s.%(ext)s")
         ffmpeg_bin = shutil.which('ffmpeg')
 
-        ydl_opts: Dict[str, Any] = {
+        ydl_opts = get_base_ydl_opts()
+        ydl_opts.update({
             'outtmpl': outtmpl,
-            'quiet': True,
-            'no_warnings': True,
-            'noplaylist': True,
             'socket_timeout': settings.DOWNLOAD_TIMEOUT,
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            }
-        }
+        })
 
         if ffmpeg_bin:
             ydl_opts['ffmpeg_location'] = ffmpeg_bin
@@ -304,8 +357,9 @@ class DownloadService:
                 return file_path, filename, content_type, file_size
 
         except yt_dlp.utils.DownloadError as e:
-            error_msg = str(e).lower()
-            logger.warning(f"yt-dlp DownloadError during download for {url}: {error_msg}")
+            raw_err = str(e)
+            error_msg = raw_err.lower()
+            logger.error(f"yt-dlp DownloadError during download for {url}: {raw_err}", exc_info=True)
             if task_dir.exists():
                 shutil.rmtree(task_dir, ignore_errors=True)
 
@@ -320,7 +374,8 @@ class DownloadService:
             elif "geo" in error_msg or "country" in error_msg or "blocked" in error_msg:
                 raise ValueError("GEO_RESTRICTED: This video is restricted in the server region.")
             else:
-                raise ValueError("DOWNLOAD_FAILED: Unable to download the requested media stream.")
+                cleaned_msg = raw_err.replace("ERROR: ", "").strip()
+                raise ValueError(f"DOWNLOAD_FAILED: {cleaned_msg}")
 
         except Exception as e:
             logger.error(f"Download processing failed for {url}: {e}", exc_info=True)
