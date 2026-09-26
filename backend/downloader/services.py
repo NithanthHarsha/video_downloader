@@ -3,12 +3,24 @@ import uuid
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
+import importlib.metadata
+import subprocess
 import shutil
 import yt_dlp
 from django.conf import settings
 from .utils import sanitize_filename, format_duration, format_filesize
 
 logger = logging.getLogger(__name__)
+
+
+def _get_binary_version(binary_path: str) -> Optional[str]:
+    try:
+        res = subprocess.run([binary_path, "--version"], capture_output=True, text=True, timeout=5)
+        if res.returncode == 0 and res.stdout:
+            return res.stdout.strip().splitlines()[0]
+    except Exception:
+        pass
+    return None
 
 
 def get_discovered_js_runtimes() -> Dict[str, Dict[str, Any]]:
@@ -33,8 +45,23 @@ def get_discovered_js_runtimes() -> Dict[str, Dict[str, Any]]:
                 deno_bin = str(candidate)
                 break
 
+    # If running on Linux/Render and no Deno was found, attempt automated runtime installation
+    if not deno_bin and os.name != 'nt':
+        try:
+            logger.info("Deno not found in PATH or standard paths; attempting runtime bootstrap...")
+            install_cmd = "curl -fsSL https://deno.land/install.sh | sh"
+            subprocess.run(install_cmd, shell=True, capture_output=True, text=True, timeout=60)
+            candidate = Path.home() / ".deno" / "bin" / "deno"
+            if candidate.exists():
+                deno_bin = str(candidate)
+                logger.info(f"Deno successfully installed at runtime: {deno_bin}")
+        except Exception as err:
+            logger.warning(f"Could not bootstrap Deno at runtime: {err}")
+
     if deno_bin:
         runtimes['deno'] = {'path': deno_bin}
+        deno_version = _get_binary_version(deno_bin)
+        logger.info(f"[Diagnostics] Detected Deno runtime at '{deno_bin}' (Version: {deno_version or 'unknown'})")
     else:
         runtimes['deno'] = {}
 
@@ -42,6 +69,8 @@ def get_discovered_js_runtimes() -> Dict[str, Dict[str, Any]]:
     node_bin = shutil.which('node')
     if node_bin:
         runtimes['node'] = {'path': node_bin}
+        node_version = _get_binary_version(node_bin)
+        logger.info(f"[Diagnostics] Detected Node runtime at '{node_bin}' (Version: {node_version or 'unknown'})")
     else:
         runtimes['node'] = {}
 
@@ -59,6 +88,27 @@ def get_discovered_js_runtimes() -> Dict[str, Dict[str, Any]]:
         runtimes['bun'] = {}
 
     return runtimes
+
+
+def log_extraction_diagnostics(url: str):
+    """
+    Logs safe runtime diagnostics for yt-dlp execution without exposing credentials.
+    """
+    try:
+        ytdlp_ver = getattr(yt_dlp.version, '__version__', 'unknown')
+    except Exception:
+        ytdlp_ver = 'unknown'
+
+    try:
+        ejs_ver = importlib.metadata.version('yt-dlp-ejs')
+        ejs_available = True
+    except Exception:
+        ejs_ver = 'not-installed'
+        ejs_available = False
+
+    logger.info(
+        f"[Diagnostics] yt-dlp: {ytdlp_ver} | yt-dlp-ejs: {ejs_ver} (available={ejs_available}) | Target URL: {url}"
+    )
 
 
 def get_base_ydl_opts() -> Dict[str, Any]:
@@ -95,6 +145,7 @@ class VideoService:
         """
         Extracts video metadata from a public URL.
         """
+        log_extraction_diagnostics(url)
         ydl_opts = cls.get_ydl_opts()
 
         try:
@@ -106,12 +157,14 @@ class VideoService:
                 if 'entries' in info and info['entries']:
                     info = info['entries'][0]
 
+                extractor_used = info.get('extractor') or info.get('extractor_key') or 'unknown'
+                logger.info(f"[Diagnostics] Extraction successful for {url} using extractor: {extractor_used}")
                 return cls._parse_video_info(url, info)
 
         except yt_dlp.utils.DownloadError as e:
             raw_err = str(e)
             error_msg = raw_err.lower()
-            logger.error(f"yt-dlp DownloadError for {url}: {raw_err}", exc_info=True)
+            logger.error(f"[Diagnostics] yt-dlp DownloadError for {url}: {raw_err}", exc_info=True)
 
             if "private video" in error_msg or "is private" in error_msg:
                 raise ValueError("PRIVATE_VIDEO: This video is private and cannot be accessed.")
@@ -130,7 +183,7 @@ class VideoService:
                 raise ValueError(f"EXTRACTION_FAILED: {cleaned_msg}")
 
         except Exception as e:
-            logger.error(f"Unexpected error extracting {url}: {e}", exc_info=True)
+            logger.error(f"[Diagnostics] Unexpected error extracting {url}: {e}", exc_info=True)
             raise ValueError(f"EXTRACTION_FAILED: {str(e)}")
 
     @classmethod
