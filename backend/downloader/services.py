@@ -27,10 +27,11 @@ def check_pot_server_health(host: str = "127.0.0.1", port: int = 4416) -> bool:
             f"http://{host}:{port}/ping",
             headers={"User-Agent": "yt-dlp-pot-checker"}
         )
-        with urllib.request.urlopen(req, timeout=1.0) as resp:
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
             if resp.status == 200:
                 data = json.loads(resp.read().decode())
-                return bool(data.get("version") or data.get("status") == "ok")
+                version = data.get("version", "")
+                return bool(version.startswith("2.") or data.get("status") == "ok")
     except Exception:
         pass
     return False
@@ -38,55 +39,60 @@ def check_pot_server_health(host: str = "127.0.0.1", port: int = 4416) -> bool:
 
 def ensure_pot_server_running() -> bool:
     """
-    Ensures the local bgutil PO Token Provider HTTP server is running on 127.0.0.1:4416
-    for dynamic, unauthenticated BotGuard challenge resolution.
+    Ensures the local bgutil PO Token Provider HTTP server (v2.0.0) is running on 127.0.0.1:4416
+    for dynamic BotGuard challenge resolution.
     """
     global _pot_server_process
     if check_pot_server_health():
         return True
 
-    pot_candidates = [
-        shutil.which('bgutil-pot'),
-        str(Path.home() / ".deno" / "bin" / ("bgutil-pot.exe" if os.name == "nt" else "bgutil-pot")),
-        "/opt/render/.deno/bin/bgutil-pot",
-        "/root/.deno/bin/bgutil-pot",
-        str(settings.BASE_DIR / "bin" / ("bgutil-pot.exe" if os.name == "nt" else "bgutil-pot")),
+    # Look for compiled bgutil-server main.js
+    server_candidates = [
+        settings.BASE_DIR / "bgutil-server" / "build" / "main.js",
+        Path.cwd() / "bgutil-server" / "build" / "main.js",
+        Path.home() / "bgutil-server" / "build" / "main.js",
+        Path("/opt/render/project/src/backend/bgutil-server/build/main.js"),
     ]
 
-    pot_bin = None
-    for cand in pot_candidates:
-        if cand and os.path.exists(cand) and os.path.isfile(cand) and os.path.getsize(cand) > 1000000 and os.access(cand, os.X_OK if hasattr(os, 'X_OK') else os.F_OK):
-            pot_bin = cand
+    server_script = None
+    for cand in server_candidates:
+        if cand.exists() and cand.is_file():
+            server_script = str(cand)
             break
 
-    # If running on Linux and binary not present, attempt runtime download
-    if not pot_bin and os.name != 'nt':
-        try:
-            target_dir = Path.home() / ".deno" / "bin"
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target_bin = target_dir / "bgutil-pot"
-            logger.info("Downloading bgutil-pot binary for Linux PO Token generation...")
-            urllib.request.urlretrieve(
-                "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/latest/download/bgutil-pot-linux-x86_64",
-                str(target_bin)
-            )
-            os.chmod(str(target_bin), 0o755)
-            pot_bin = str(target_bin)
-        except Exception as err:
-            logger.warning(f"Could not auto-download bgutil-pot binary: {err}")
+    # If main.js does not exist yet but bgutil-server directory exists, attempt compilation
+    if not server_script:
+        bgutil_dirs = [
+            settings.BASE_DIR / "bgutil-server",
+            Path.cwd() / "bgutil-server",
+            Path("/opt/render/project/src/backend/bgutil-server"),
+        ]
+        for b_dir in bgutil_dirs:
+            if (b_dir / "package.json").exists():
+                try:
+                    logger.info(f"Compiling bgutil-server TypeScript code in '{b_dir}'...")
+                    subprocess.run(["npx", "tsc"], cwd=str(b_dir), shell=(os.name == 'nt'), capture_output=True, timeout=30)
+                    built = b_dir / "build" / "main.js"
+                    if built.exists():
+                        server_script = str(built)
+                        break
+                except Exception as err:
+                    logger.warning(f"Could not build bgutil-server at runtime: {err}")
 
-    if pot_bin:
+    node_bin = shutil.which('node') or 'node'
+
+    if server_script:
         try:
-            logger.info(f"Starting bgutil PO token server at '{pot_bin}' on 127.0.0.1:4416...")
+            logger.info(f"Starting bgutil PO Token server from '{server_script}' on 127.0.0.1:4416...")
             _pot_server_process = subprocess.Popen(
-                [pot_bin, "server", "--host", "127.0.0.1", "--port", "4416"],
+                [node_bin, server_script, "--port", "4416", "--host", "127.0.0.1"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            for _ in range(10):
+            for _ in range(15):
                 time.sleep(0.2)
                 if check_pot_server_health():
-                    logger.info("bgutil PO token server is healthy and active on 127.0.0.1:4416")
+                    logger.info("[POT Supervisor] bgutil PO token server is healthy and active on 127.0.0.1:4416")
                     return True
         except Exception as err:
             logger.warning(f"Failed to start bgutil PO token server process: {err}")
@@ -173,7 +179,7 @@ def get_discovered_js_runtimes() -> Dict[str, Dict[str, Any]]:
 
 def log_extraction_diagnostics(url: str):
     """
-    Logs safe runtime diagnostics for yt-dlp execution without exposing credentials.
+    Logs safe runtime diagnostics for yt-dlp execution without exposing credentials or tokens.
     """
     try:
         ytdlp_ver = getattr(yt_dlp.version, '__version__', 'unknown')
@@ -182,24 +188,36 @@ def log_extraction_diagnostics(url: str):
 
     try:
         ejs_ver = importlib.metadata.version('yt-dlp-ejs')
-        ejs_available = True
     except Exception:
         ejs_ver = 'not-installed'
-        ejs_available = False
 
     try:
         pot_pkg_ver = importlib.metadata.version('bgutil-ytdlp-pot-provider')
     except Exception:
         pot_pkg_ver = 'not-installed'
 
-    pot_server_online = check_pot_server_health()
+    provider_registered = False
+    try:
+        from yt_dlp.extractor.youtube.pot._registry import _pot_providers
+        provider_registered = any('BgUtil' in k or 'bgutil' in str(v).lower() for k, v in _pot_providers.items())
+    except Exception:
+        pass
+
+    bgutil_reachable = check_pot_server_health()
     runtimes = get_discovered_js_runtimes()
-    active_js_runtimes = [k for k, v in runtimes.items() if v.get('path') or k in ('deno', 'node')]
+    deno_ver = _get_binary_version(runtimes.get('deno', {}).get('path', '')) if runtimes.get('deno', {}).get('path') else 'not-found'
+    node_ver = _get_binary_version(runtimes.get('node', {}).get('path', '')) if runtimes.get('node', {}).get('path') else 'not-found'
 
     logger.info(
-        f"[Diagnostics] yt-dlp: {ytdlp_ver} | yt-dlp-ejs: {ejs_ver} (available={ejs_available}) | "
-        f"POT Provider: bgutil-ytdlp-pot-provider={pot_pkg_ver} (server 127.0.0.1:4416 online={pot_server_online}) | "
-        f"JS Runtimes: {active_js_runtimes} | Target URL: {url}"
+        f"[YT DEBUG] provider_registered={provider_registered} | "
+        f"bgutil_reachable={bgutil_reachable} | "
+        f"selected_client=mweb | "
+        f"yt_dlp_version={ytdlp_ver} | "
+        f"yt_dlp_ejs_version={ejs_ver} | "
+        f"bgutil_provider_version={pot_pkg_ver} | "
+        f"deno_version={deno_ver} | "
+        f"node_version={node_ver} | "
+        f"target_url={url}"
     )
 
 
@@ -208,7 +226,7 @@ def get_base_ydl_opts() -> Dict[str, Any]:
     Returns standard yt-dlp configuration with JS runtimes and PO Token provider enabled
     for solving YouTube EJS JavaScript challenges and BotGuard Proof of Origin tokens safely.
     """
-    # Ensure local PO token server daemon is running if available
+    # Ensure local PO token server daemon is running on 127.0.0.1:4416
     ensure_pot_server_running()
 
     return {
@@ -218,10 +236,14 @@ def get_base_ydl_opts() -> Dict[str, Any]:
         'js_runtimes': get_discovered_js_runtimes(),
         'extractor_args': {
             'youtube': {
-                'player_client': ['web', 'mweb', 'android', 'ios', 'tv'],
-            }
-        }
+                'player_client': ['mweb', 'web', 'ios', 'android'],
+            },
+            'youtubepot-bgutilhttp': {
+                'base_url': ['http://127.0.0.1:4416'],
+            },
+        },
     }
+
 
 
 class VideoService:

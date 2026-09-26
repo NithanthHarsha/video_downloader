@@ -94,4 +94,21 @@ class DownloaderApiTests(TestCase):
         self.assertIn('extractor_args', opts)
         self.assertIn('youtube', opts['extractor_args'])
 
+    def test_youtube_video_info_live_extraction(self):
+        test_url = "https://youtu.be/msjA3KVNH7g?si=Hud6IICc_cdZLnLO"
+        response = self.client.post(
+            reverse('video_info'),
+            data={"url": test_url},
+            content_type="application/json"
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data.get('success'), f"Extraction failed: {data}")
+        video_data = data.get('data', {})
+        self.assertEqual(video_data.get('id'), 'msjA3KVNH7g')
+        self.assertIn('title', video_data)
+        self.assertGreater(video_data.get('duration', 0), 0)
+        self.assertGreater(len(video_data.get('formats', [])), 0)
+
+
 

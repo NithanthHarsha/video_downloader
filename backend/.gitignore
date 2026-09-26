@@ -42,3 +42,9 @@ temp_downloads/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Node / JS
+node_modules/
+bgutil-server/node_modules/
+bgutil-server/build/
+

@@ -13,12 +13,16 @@ else
     echo "Deno is already installed at: $(which deno)"
 fi
 
-echo "===> Setting up YouTube PO Token Provider (bgutil-pot)..."
-mkdir -p "$HOME/.deno/bin"
-if [ ! -f "$HOME/.deno/bin/bgutil-pot" ]; then
-    echo "Downloading bgutil-pot binary for Linux x86_64..."
-    curl -fsSL https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/latest/download/bgutil-pot-linux-x86_64 -o "$HOME/.deno/bin/bgutil-pot" || true
-    chmod +x "$HOME/.deno/bin/bgutil-pot" || true
+echo "===> Setting up YouTube PO Token Provider Server (v2.0.0)..."
+if [ -d "bgutil-server" ]; then
+    echo "Installing bgutil-server dependencies and compiling TypeScript..."
+    cd bgutil-server
+    npm install --production=false
+    npx tsc
+    cd ..
+    echo "bgutil-server successfully built!"
+else
+    echo "Warning: bgutil-server directory not found!"
 fi
 
 echo "===> Upgrading pip and installing Python dependencies..."
@@ -32,3 +36,4 @@ echo "===> Collecting static files..."
 python manage.py collectstatic --no-input
 
 echo "===> Build completed successfully!"
+
