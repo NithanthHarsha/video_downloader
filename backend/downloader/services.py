@@ -214,6 +214,12 @@ def get_base_ydl_opts() -> Dict[str, Any]:
         'no_warnings': False,
         'noplaylist': True,
         'js_runtimes': get_discovered_js_runtimes(),
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Sec-Fetch-Mode': 'navigate',
+        },
         'extractor_args': {
             'youtube': {
                 'player_client': ['ios', 'android', 'mweb', 'web'],
@@ -249,6 +255,10 @@ def _classify_ytdlp_error(raw_err: str, is_download: bool = False) -> Tuple[str,
     # Age-restricted video
     if "confirm your age" in error_lower or "age-restricted" in error_lower or "inappropriate for some users" in error_lower:
         return "AGE_RESTRICTED", "This video is age-restricted and requires account verification."
+
+    # Bot challenge / rate limiting
+    if "confirm you're not a bot" in error_lower or "confirm you are not a bot" in error_lower:
+        return "RATE_LIMITED", "YouTube is temporarily rate-limiting requests with a verification check. Please retry in a few moments."
 
     # Account authentication / login required (specifically for viewing restricted content, not bot detection)
     if ("sign in to view" in error_lower or "login required" in error_lower or "account required" in error_lower) and "bot" not in error_lower:
