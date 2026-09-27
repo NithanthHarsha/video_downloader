@@ -202,8 +202,8 @@ def log_extraction_diagnostics(url: str):
 
 def get_base_ydl_opts() -> Dict[str, Any]:
     """
-    Returns standard yt-dlp configuration with JS runtimes and PO token provider enabled
-    for solving YouTube EJS JavaScript challenges and Proof of Origin tokens safely.
+    Returns standard yt-dlp configuration with JS runtimes, PO token provider,
+    and browser TLS fingerprint impersonation enabled for solving YouTube challenges safely.
     """
     ensure_pot_server_running()
 
@@ -222,7 +222,7 @@ def get_base_ydl_opts() -> Dict[str, Any]:
         },
         'extractor_args': {
             'youtube': {
-                'player_client': ['ios', 'android', 'mweb', 'web'],
+                'player_client': ['web_embedded', 'android', 'ios', 'mweb', 'web'],
             },
             'youtubepot-bgutilhttp': {
                 'base_url': ['http://127.0.0.1:4416'],
@@ -232,6 +232,12 @@ def get_base_ydl_opts() -> Dict[str, Any]:
             },
         },
     }
+
+    try:
+        from yt_dlp.networking.impersonate import ImpersonateTarget
+        opts['impersonate'] = ImpersonateTarget.from_str('chrome')
+    except Exception as e:
+        logger.debug(f"Impersonate target not configured: {e}")
 
     return opts
 
