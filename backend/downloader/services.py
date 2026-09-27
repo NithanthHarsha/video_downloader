@@ -203,7 +203,7 @@ def log_extraction_diagnostics(url: str):
 def get_base_ydl_opts() -> Dict[str, Any]:
     """
     Returns standard yt-dlp configuration with JS runtimes, PO token provider,
-    and browser TLS fingerprint impersonation enabled for solving YouTube challenges safely.
+    browser TLS fingerprint impersonation, and optional proxy/cookie support enabled.
     """
     ensure_pot_server_running()
 
@@ -222,7 +222,7 @@ def get_base_ydl_opts() -> Dict[str, Any]:
         },
         'extractor_args': {
             'youtube': {
-                'player_client': ['web_embedded', 'android', 'ios', 'mweb', 'web'],
+                'player_client': ['android', 'ios', 'mweb', 'web_embedded', 'web'],
             },
             'youtubepot-bgutilhttp': {
                 'base_url': ['http://127.0.0.1:4416'],
@@ -232,6 +232,32 @@ def get_base_ydl_opts() -> Dict[str, Any]:
             },
         },
     }
+
+    # 1. Check for proxy configuration (YOUTUBE_PROXY or HTTP_PROXY)
+    proxy = os.getenv('YOUTUBE_PROXY') or os.getenv('HTTP_PROXY') or os.getenv('HTTPS_PROXY')
+    if proxy and proxy.strip():
+        opts['proxy'] = proxy.strip()
+
+    # 2. Check for cookie file or YOUTUBE_COOKIES environment variable
+    cookie_candidates = [
+        settings.BASE_DIR / 'cookies.txt',
+        Path('/opt/render/project/src/cookies.txt'),
+        Path.home() / 'cookies.txt',
+    ]
+    for c_path in cookie_candidates:
+        if c_path.exists() and c_path.stat().st_size > 0:
+            opts['cookiefile'] = str(c_path)
+            break
+
+    if 'cookiefile' not in opts and os.getenv('YOUTUBE_COOKIES'):
+        cookies_text = os.getenv('YOUTUBE_COOKIES', '').strip()
+        if cookies_text:
+            yt_cookie_file = settings.BASE_DIR / '.yt_cookies.txt'
+            try:
+                yt_cookie_file.write_text(cookies_text, encoding='utf-8')
+                opts['cookiefile'] = str(yt_cookie_file)
+            except Exception as e:
+                logger.warning(f"Could not write .yt_cookies.txt: {e}")
 
     try:
         from yt_dlp.networking.impersonate import ImpersonateTarget
