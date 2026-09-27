@@ -3,6 +3,12 @@
 set -o errexit
 
 echo "===> Checking and installing JavaScript runtime (Deno) for yt-dlp EJS solver..."
+for deno_dir in "$HOME/.deno/bin" "/opt/render/.deno/bin" "/root/.deno/bin"; do
+    if [ -d "$deno_dir" ]; then
+        export PATH="$deno_dir:$PATH"
+    fi
+done
+
 if ! command -v deno &> /dev/null; then
     echo "Deno not found in PATH. Installing Deno..."
     curl -fsSL https://deno.land/install.sh | sh

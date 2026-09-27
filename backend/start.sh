@@ -4,11 +4,13 @@ set -e
 
 echo "===> Preparing runtime environment..."
 
-# Export Deno to PATH if installed in user directory
+# Export Deno to PATH if installed in standard user or system directories
 export DENO_INSTALL="$HOME/.deno"
-if [ -d "$DENO_INSTALL/bin" ]; then
-    export PATH="$DENO_INSTALL/bin:$PATH"
-fi
+for deno_dir in "$HOME/.deno/bin" "/opt/render/.deno/bin" "/root/.deno/bin"; do
+    if [ -d "$deno_dir" ]; then
+        export PATH="$deno_dir:$PATH"
+    fi
+done
 
 # Start bgutil PO Token Provider HTTP server
 if [ -d "bgutil-server" ]; then

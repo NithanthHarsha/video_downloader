@@ -40,7 +40,7 @@ def check_pot_server_health(host: str = "127.0.0.1", port: int = 4416) -> bool:
 def ensure_pot_server_running() -> bool:
     """
     Ensures the local bgutil PO Token Provider HTTP server (v2.0.0) is running on 127.0.0.1:4416
-    for dynamic BotGuard challenge resolution.
+    if built and available, without blocking on compilation.
     """
     global _pot_server_process
     if check_pot_server_health():
@@ -60,41 +60,12 @@ def ensure_pot_server_running() -> bool:
             break
 
     if not bgutil_dir:
-        logger.warning("[POT Supervisor] bgutil-server directory not found")
         return False
 
-    # Ensure node_modules exists
-    if not (bgutil_dir / "node_modules").exists():
-        try:
-            logger.info(f"Installing bgutil-server npm dependencies in '{bgutil_dir}'...")
-            subprocess.run(
-                ["npm", "install", "--omit=dev", "--no-audit", "--no-fund"],
-                cwd=str(bgutil_dir),
-                shell=(os.name == 'nt'),
-                capture_output=True,
-                timeout=60
-            )
-        except Exception as err:
-            logger.warning(f"Could not install npm dependencies: {err}")
-
-    # Ensure build/main.js exists
     main_js = bgutil_dir / "build" / "main.js"
-    if not main_js.exists():
-        try:
-            logger.info(f"Compiling bgutil-server TypeScript in '{bgutil_dir}'...")
-            subprocess.run(
-                ["npx", "tsc"],
-                cwd=str(bgutil_dir),
-                shell=(os.name == 'nt'),
-                capture_output=True,
-                timeout=30
-            )
-        except Exception as err:
-            logger.warning(f"Could not compile TypeScript: {err}")
-
     node_bin = shutil.which('node') or 'node'
 
-    if main_js.exists():
+    if main_js.exists() and _pot_server_process is None:
         try:
             logger.info(f"Starting bgutil PO Token server in '{bgutil_dir}' on 127.0.0.1:4416...")
             _pot_server_process = subprocess.Popen(
@@ -103,8 +74,8 @@ def ensure_pot_server_running() -> bool:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            for _ in range(25):
-                time.sleep(0.2)
+            for _ in range(5):
+                time.sleep(0.1)
                 if check_pot_server_health():
                     logger.info("[POT Supervisor] bgutil PO token server is healthy and active on 127.0.0.1:4416")
                     return True
@@ -127,11 +98,12 @@ def _get_binary_version(binary_path: str) -> Optional[str]:
 def get_discovered_js_runtimes() -> Dict[str, Dict[str, Any]]:
     """
     Discovers available JavaScript runtimes (Deno, Node, QuickJS, Bun)
-    to power yt-dlp YouTube EJS challenge solvers.
+    to power yt-dlp YouTube EJS challenge solvers. Deno is the primary
+    runtime recommended by yt-dlp.
     """
     runtimes: Dict[str, Dict[str, Any]] = {}
 
-    # Check for Deno (primary recommendation for yt-dlp EJS)
+    # 1. Check for Deno (primary recommendation for yt-dlp EJS)
     deno_bin = shutil.which('deno')
     if not deno_bin:
         deno_candidates = [
@@ -146,19 +118,6 @@ def get_discovered_js_runtimes() -> Dict[str, Dict[str, Any]]:
                 deno_bin = str(candidate)
                 break
 
-    # If running on Linux/Render and no Deno was found, attempt automated runtime installation
-    if not deno_bin and os.name != 'nt':
-        try:
-            logger.info("Deno not found in PATH or standard paths; attempting runtime bootstrap...")
-            install_cmd = "curl -fsSL https://deno.land/install.sh | sh"
-            subprocess.run(install_cmd, shell=True, capture_output=True, text=True, timeout=60)
-            candidate = Path.home() / ".deno" / "bin" / "deno"
-            if candidate.exists():
-                deno_bin = str(candidate)
-                logger.info(f"Deno successfully installed at runtime: {deno_bin}")
-        except Exception as err:
-            logger.warning(f"Could not bootstrap Deno at runtime: {err}")
-
     if deno_bin:
         runtimes['deno'] = {'path': str(deno_bin)}
         deno_version = _get_binary_version(str(deno_bin))
@@ -166,7 +125,7 @@ def get_discovered_js_runtimes() -> Dict[str, Dict[str, Any]]:
     else:
         runtimes['deno'] = {}
 
-    # Check for Node.js
+    # 2. Check for Node.js (supported fallback)
     node_bin = shutil.which('node')
     if not node_bin:
         node_candidates = [
@@ -186,7 +145,7 @@ def get_discovered_js_runtimes() -> Dict[str, Dict[str, Any]]:
     else:
         runtimes['node'] = {}
 
-    # QuickJS and Bun fallbacks
+    # 3. QuickJS and Bun fallbacks
     quickjs_bin = shutil.which('quickjs') or shutil.which('qjs')
     if quickjs_bin:
         runtimes['quickjs'] = {'path': str(quickjs_bin)}
@@ -230,12 +189,11 @@ def log_extraction_diagnostics(url: str):
     node_ver = _get_binary_version(runtimes.get('node', {}).get('path', '')) if runtimes.get('node', {}).get('path') else 'not-found'
 
     logger.info(
-        f"[YT DEBUG] provider_registered={provider_registered} | "
-        f"bgutil_reachable={bgutil_reachable} | "
-        f"selected_client=default,mweb,android | "
-        f"yt_dlp_version={ytdlp_ver} | "
+        f"[YT DIAGNOSTICS] yt_dlp_version={ytdlp_ver} | "
         f"yt_dlp_ejs_version={ejs_ver} | "
         f"bgutil_provider_version={pot_pkg_ver} | "
+        f"provider_registered={provider_registered} | "
+        f"bgutil_reachable={bgutil_reachable} | "
         f"deno_version={deno_ver} | "
         f"node_version={node_ver} | "
         f"target_url={url}"
@@ -244,29 +202,78 @@ def log_extraction_diagnostics(url: str):
 
 def get_base_ydl_opts() -> Dict[str, Any]:
     """
-    Returns standard yt-dlp configuration with JS runtimes and PO Token provider enabled
-    for solving YouTube EJS JavaScript challenges and BotGuard Proof of Origin tokens safely.
+    Returns standard yt-dlp configuration with JS runtimes enabled
+    for solving YouTube EJS JavaScript challenges safely.
     """
-    # Ensure local PO token server daemon is running on 127.0.0.1:4416
     ensure_pot_server_running()
 
-    return {
+    opts: Dict[str, Any] = {
         'quiet': True,
-        'no_warnings': True,
+        'no_warnings': False,
         'noplaylist': True,
         'js_runtimes': get_discovered_js_runtimes(),
         'extractor_args': {
             'youtube': {
-                'player_client': ['default', 'web', 'mweb', 'android', 'tv'],
-                'fetch_pot': ['always'],
-                'webpage_skip': ['player_response'],
-            },
-            'youtubepot-bgutilhttp': {
-                'base_url': ['http://127.0.0.1:4416'],
+                'player_client': ['default', 'web', 'mweb', 'ios'],
             },
         },
     }
 
+    if check_pot_server_health():
+        opts['extractor_args']['youtubepot-bgutilhttp'] = {
+            'base_url': ['http://127.0.0.1:4416'],
+        }
+
+    return opts
+
+
+def _classify_ytdlp_error(raw_err: str, is_download: bool = False) -> Tuple[str, str]:
+    """
+    Parses yt-dlp DownloadError string and classifies it into standard error code and user-facing message.
+    Distinguishes strictly between actual access restrictions (private, members-only, age-restricted)
+    and technical extraction failures.
+    """
+    error_lower = raw_err.lower()
+
+    # Private video
+    if "private video" in error_lower or "is private" in error_lower or "this video is private" in error_lower:
+        return "PRIVATE_VIDEO", "This video is private and requires authorized access."
+
+    # Members-only video
+    if "members-only" in error_lower or "members only" in error_lower or "join this channel" in error_lower or "channel member" in error_lower:
+        return "MEMBERS_ONLY", "This video is members-only and requires a channel membership."
+
+    # Age-restricted video
+    if "confirm your age" in error_lower or "age-restricted" in error_lower or "inappropriate for some users" in error_lower:
+        return "AGE_RESTRICTED", "This video is age-restricted and requires account verification."
+
+    # Account authentication / login required (specifically for viewing restricted content, not bot detection)
+    if ("sign in to view" in error_lower or "login required" in error_lower or "account required" in error_lower) and "bot" not in error_lower:
+        return "AUTH_REQUIRED", "This video requires authorized account access."
+
+    # DRM Protected
+    if "drm" in error_lower or "protected" in error_lower:
+        action = "downloaded" if is_download else "accessed"
+        return "DRM_PROTECTED", f"This video is DRM-protected and cannot be {action}."
+
+    # Geographic restrictions
+    if "not available in your country" in error_lower or "geo" in error_lower or "country" in error_lower or "blocked in your country" in error_lower or "uploader has not made this video available in your country" in error_lower:
+        return "GEO_RESTRICTED", "This video is restricted in the server region."
+
+    # Video not found or deleted
+    if "not available" in error_lower or "unavailable" in error_lower or "not found" in error_lower or "404" in error_lower or "removed by" in error_lower or "does not exist" in error_lower:
+        return "VIDEO_NOT_FOUND", "The requested video could not be found or is unavailable."
+
+    # Unsupported URL
+    if "unsupported url" in error_lower:
+        return "UNSUPPORTED_URL", "The provided URL is not supported."
+
+    # Technical extraction or download error
+    prefix = "DOWNLOAD_FAILED" if is_download else "EXTRACTION_FAILED"
+    cleaned_msg = raw_err.replace("ERROR: ", "").replace("WARNING: ", "").strip()
+    lines = [line.strip() for line in cleaned_msg.splitlines() if line.strip()]
+    final_msg = lines[0] if lines else "Extraction failed. Please verify the URL."
+    return prefix, final_msg
 
 
 class VideoService:
@@ -308,27 +315,14 @@ class VideoService:
 
         except yt_dlp.utils.DownloadError as e:
             raw_err = str(e)
-            error_msg = raw_err.lower()
-            logger.error(f"[Diagnostics] yt-dlp DownloadError for {url}: {raw_err}", exc_info=True)
-
-            if "private video" in error_msg or "is private" in error_msg:
-                raise ValueError("PRIVATE_VIDEO: This video is private and cannot be accessed.")
-            elif "drm" in error_msg or "protected" in error_msg:
-                raise ValueError("DRM_PROTECTED: This video is DRM-protected and cannot be downloaded.")
-            elif "sign in" in error_msg or "login" in error_msg or "members-only" in error_msg:
-                raise ValueError("RESTRICTED_CONTENT: This video requires account authentication or membership.")
-            elif "not available" in error_msg or "not found" in error_msg or "404" in error_msg:
-                raise ValueError("VIDEO_NOT_FOUND: The requested video could not be found or is unavailable.")
-            elif "geo" in error_msg or "country" in error_msg or "blocked" in error_msg:
-                raise ValueError("GEO_RESTRICTED: This video is restricted in the server region.")
-            elif "unsupported url" in error_msg:
-                raise ValueError("UNSUPPORTED_URL: The provided URL is not supported.")
-            else:
-                cleaned_msg = raw_err.replace("ERROR: ", "").strip()
-                raise ValueError(f"EXTRACTION_FAILED: {cleaned_msg}")
+            code, user_msg = _classify_ytdlp_error(raw_err, is_download=False)
+            logger.error(f"[yt-dlp DownloadError] URL: {url} | Code: {code} | Details: {raw_err}", exc_info=True)
+            raise ValueError(f"{code}: {user_msg}")
 
         except Exception as e:
-            logger.error(f"[Diagnostics] Unexpected error extracting {url}: {e}", exc_info=True)
+            logger.error(f"[Unexpected Extraction Error] URL: {url} | Type: {type(e).__name__} | Details: {e}", exc_info=True)
+            if ":" in str(e) and str(e).split(":")[0].isupper():
+                raise e
             raise ValueError(f"EXTRACTION_FAILED: {str(e)}")
 
     @classmethod
@@ -556,27 +550,16 @@ class DownloadService:
 
         except yt_dlp.utils.DownloadError as e:
             raw_err = str(e)
-            error_msg = raw_err.lower()
-            logger.error(f"yt-dlp DownloadError during download for {url}: {raw_err}", exc_info=True)
             if task_dir.exists():
                 shutil.rmtree(task_dir, ignore_errors=True)
-
-            if "private video" in error_msg or "is private" in error_msg:
-                raise ValueError("PRIVATE_VIDEO: This video is private and cannot be downloaded.")
-            elif "drm" in error_msg or "protected" in error_msg:
-                raise ValueError("DRM_PROTECTED: This video is DRM-protected and cannot be downloaded.")
-            elif "sign in" in error_msg or "login" in error_msg or "members-only" in error_msg:
-                raise ValueError("RESTRICTED_CONTENT: This video requires authentication or membership.")
-            elif "not available" in error_msg or "not found" in error_msg or "404" in error_msg:
-                raise ValueError("VIDEO_NOT_FOUND: The requested video is unavailable or has been removed.")
-            elif "geo" in error_msg or "country" in error_msg or "blocked" in error_msg:
-                raise ValueError("GEO_RESTRICTED: This video is restricted in the server region.")
-            else:
-                cleaned_msg = raw_err.replace("ERROR: ", "").strip()
-                raise ValueError(f"DOWNLOAD_FAILED: {cleaned_msg}")
+            code, user_msg = _classify_ytdlp_error(raw_err, is_download=True)
+            logger.error(f"[yt-dlp DownloadError during download] URL: {url} | Code: {code} | Details: {raw_err}", exc_info=True)
+            raise ValueError(f"{code}: {user_msg}")
 
         except Exception as e:
-            logger.error(f"Download processing failed for {url}: {e}", exc_info=True)
+            logger.error(f"[Unexpected Download Error] URL: {url} | Type: {type(e).__name__} | Details: {e}", exc_info=True)
             if task_dir.exists():
                 shutil.rmtree(task_dir, ignore_errors=True)
-            raise e
+            if ":" in str(e) and str(e).split(":")[0].isupper():
+                raise e
+            raise ValueError(f"DOWNLOAD_FAILED: {str(e)}")
