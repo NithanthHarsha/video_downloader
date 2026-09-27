@@ -23,7 +23,7 @@ echo "===> Setting up YouTube PO Token Provider Server (v2.0.0)..."
 if [ -d "bgutil-server" ]; then
     echo "Installing bgutil-server dependencies and building..."
     cd bgutil-server
-    npm install --omit=dev --no-audit --no-fund || npm install
+    npm install --no-audit --no-fund || npm install --omit=dev --no-audit --no-fund || true
     npx tsc || true
     cd ..
     echo "bgutil-server successfully prepared!"

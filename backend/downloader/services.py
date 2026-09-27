@@ -202,10 +202,12 @@ def log_extraction_diagnostics(url: str):
 
 def get_base_ydl_opts() -> Dict[str, Any]:
     """
-    Returns standard yt-dlp configuration with JS runtimes enabled
-    for solving YouTube EJS JavaScript challenges safely.
+    Returns standard yt-dlp configuration with JS runtimes and PO token provider enabled
+    for solving YouTube EJS JavaScript challenges and Proof of Origin tokens safely.
     """
     ensure_pot_server_running()
+
+    bgutil_server_path = str(settings.BASE_DIR / 'bgutil-server')
 
     opts: Dict[str, Any] = {
         'quiet': True,
@@ -214,15 +216,16 @@ def get_base_ydl_opts() -> Dict[str, Any]:
         'js_runtimes': get_discovered_js_runtimes(),
         'extractor_args': {
             'youtube': {
-                'player_client': ['ios', 'mweb', 'android', 'web', 'default'],
+                'player_client': ['ios', 'android', 'mweb', 'web'],
+            },
+            'youtubepot-bgutilhttp': {
+                'base_url': ['http://127.0.0.1:4416'],
+            },
+            'youtubepot-bgutilscript': {
+                'server_home': [bgutil_server_path],
             },
         },
     }
-
-    if check_pot_server_health():
-        opts['extractor_args']['youtubepot-bgutilhttp'] = {
-            'base_url': ['http://127.0.0.1:4416'],
-        }
 
     return opts
 

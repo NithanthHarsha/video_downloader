@@ -16,37 +16,35 @@ done
 if [ -d "bgutil-server" ]; then
     cd bgutil-server
 
-    # Ensure node_modules exists
-    if [ ! -d "node_modules" ]; then
+    # Ensure build/main.js or dependencies exist
+    if [ ! -f "build/main.js" ] && [ ! -d "node_modules" ]; then
         echo "Installing bgutil-server dependencies at startup..."
-        npm install --omit=dev --no-audit --no-fund || npm install
-    fi
-
-    # Ensure build/main.js exists
-    if [ ! -f "build/main.js" ]; then
-        echo "Compiling bgutil-server TypeScript..."
+        npm install --no-audit --no-fund || true
         npx tsc || true
     fi
 
     echo "Starting local bgutil PO Token HTTP server (v2.0.0) on 127.0.0.1:4416..."
-    node build/main.js --port 4416 --host 127.0.0.1 >> ../bgutil_server.log 2>&1 &
+    if [ -f "build/main.js" ]; then
+        node build/main.js --port 4416 --host 127.0.0.1 >> ../bgutil_server.log 2>&1 &
+    elif command -v deno &> /dev/null; then
+        deno run --allow-net --allow-read --allow-env src/main.ts --port 4416 --host 127.0.0.1 >> ../bgutil_server.log 2>&1 &
+    fi
     cd ..
 
     # Health check verification loop
     echo "Waiting for bgutil PO Token server to respond on 127.0.0.1:4416/ping..."
     SERVER_READY=false
-    for i in {1..30}; do
+    for i in {1..20}; do
         if curl -s -f http://127.0.0.1:4416/ping > /dev/null 2>&1; then
             echo "bgutil PO Token server is UP and responding on 127.0.0.1:4416!"
             SERVER_READY=true
             break
         fi
-        sleep 0.5
+        sleep 0.3
     done
 
     if [ "$SERVER_READY" = false ]; then
-        echo "WARNING: bgutil-server did not respond to /ping in 15 seconds. Log output:"
-        cat bgutil_server.log || true
+        echo "Note: bgutil HTTP daemon will fall back to dynamic script provider."
     fi
 fi
 
