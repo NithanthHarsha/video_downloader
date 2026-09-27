@@ -252,6 +252,15 @@ def get_base_ydl_opts() -> Dict[str, Any]:
     if 'cookiefile' not in opts and os.getenv('YOUTUBE_COOKIES'):
         cookies_text = os.getenv('YOUTUBE_COOKIES', '').strip()
         if cookies_text:
+            if cookies_text.startswith('base64:'):
+                import base64
+                try:
+                    cookies_text = base64.b64decode(cookies_text[7:]).decode('utf-8', errors='ignore')
+                except Exception:
+                    pass
+            elif '\\n' in cookies_text and '\n' not in cookies_text:
+                cookies_text = cookies_text.replace('\\n', '\n')
+
             yt_cookie_file = settings.BASE_DIR / '.yt_cookies.txt'
             try:
                 yt_cookie_file.write_text(cookies_text, encoding='utf-8')
@@ -274,7 +283,11 @@ def _classify_ytdlp_error(raw_err: str, is_download: bool = False) -> Tuple[str,
     Distinguishes strictly between actual access restrictions (private, members-only, age-restricted)
     and technical extraction failures.
     """
-    error_lower = raw_err.lower()
+    error_lower = raw_err.lower().replace("’", "'").replace("`", "'")
+
+    # Bot challenge / cloud datacenter rate limiting
+    if "not a bot" in error_lower or "confirm you're not a bot" in error_lower or "confirm you are not a bot" in error_lower:
+        return "BOT_VERIFICATION", "YouTube is requiring a bot verification check for this cloud server IP. Please configure a proxy or cookies."
 
     # Private video
     if "private video" in error_lower or "is private" in error_lower or "this video is private" in error_lower:
