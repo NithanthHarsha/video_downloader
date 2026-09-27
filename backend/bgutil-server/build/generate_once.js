@@ -1,5 +1,9 @@
-import { SessionManager } from "./session_manager.js";
 import { VERSION } from "./utils.js";
+// Fast-path for --version check to prevent subprocess timeouts in yt-dlp bgutil provider
+if (process.argv.includes("--version") || process.argv.includes("-V") || process.argv.includes("-v")) {
+    console.log(VERSION);
+    process.exit(0);
+}
 import { Command } from "commander";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -18,10 +22,12 @@ else {
     cachedir = path.resolve(import.meta.dirname, "..");
 }
 if (!fs.existsSync(cachedir)) {
-    fs.mkdir(cachedir, { recursive: true }, (err) => {
-        if (err)
-            throw err;
-    });
+    try {
+        fs.mkdirSync(cachedir, { recursive: true });
+    }
+    catch {
+        // ignore
+    }
 }
 const CACHE_PATH = path.resolve(cachedir, "cache.json");
 const program = new Command()
@@ -85,6 +91,7 @@ const options = program.opts();
             console.warn(`Error parsing cache. e = ${e}`);
         }
     }
+    const { SessionManager } = await import("./session_manager.js");
     const sessionManager = new SessionManager(verbose, cache || {});
     try {
         const sessionData = await sessionManager.generatePoToken(contentBinding, proxy, options.bypassCache || false, options.sourceAddress, options.disableTlsVerification || false, undefined, // challenge

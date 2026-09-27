@@ -1,5 +1,12 @@
-import { SessionManager, YoutubeSessionDataCaches } from "./session_manager.ts";
 import { VERSION } from "./utils.ts";
+
+// Fast-path for --version check to prevent subprocess timeouts in yt-dlp bgutil provider
+if (process.argv.includes("--version") || process.argv.includes("-V") || process.argv.includes("-v")) {
+    console.log(VERSION);
+    process.exit(0);
+}
+
+import type { YoutubeSessionDataCaches } from "./session_manager.ts";
 import { Command } from "commander";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -21,9 +28,11 @@ if (XDG_CACHE_HOME !== undefined) {
     cachedir = path.resolve(import.meta.dirname, "..");
 }
 if (!fs.existsSync(cachedir)) {
-    fs.mkdir(cachedir, { recursive: true }, (err) => {
-        if (err) throw err;
-    });
+    try {
+        fs.mkdirSync(cachedir, { recursive: true });
+    } catch {
+        // ignore
+    }
 }
 const CACHE_PATH = path.resolve(cachedir, "cache.json");
 
@@ -99,6 +108,7 @@ const options = program.opts();
         }
     }
 
+    const { SessionManager } = await import("./session_manager.ts");
     const sessionManager = new SessionManager(verbose, cache || {});
 
     try {
