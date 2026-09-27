@@ -214,7 +214,7 @@ def get_base_ydl_opts() -> Dict[str, Any]:
         'js_runtimes': get_discovered_js_runtimes(),
         'extractor_args': {
             'youtube': {
-                'player_client': ['default', 'web', 'mweb', 'ios'],
+                'player_client': ['ios', 'mweb', 'android', 'web', 'default'],
             },
         },
     }
